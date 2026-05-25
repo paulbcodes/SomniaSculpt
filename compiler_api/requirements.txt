@@ -1,0 +1,4 @@
+flask
+flask-cors
+py-solc-x
+web3

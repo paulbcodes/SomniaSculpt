@@ -1,0 +1,4 @@
+anthropic
+py-solc-x
+slither-analyzer
+python-dotenv

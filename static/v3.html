@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Contract Forge — v3</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0a0f; color: #c8d8e8; font-family: 'Courier New', monospace; min-height: 100vh; padding: 24px; }
+  h1 { color: #00aaff; font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: #446688; font-size: 0.8rem; margin-bottom: 32px; }
+  .card { background: #0f1520; border: 1px solid #1a2a3a; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { color: #00aaff; font-size: 0.9rem; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  input, textarea { background: #0a0f1a; border: 1px solid #1a2a3a; color: #c8d8e8; font-family: 'Courier New', monospace; font-size: 0.85rem; padding: 10px; border-radius: 4px; width: 100%; }
+  textarea { min-height: 80px; resize: vertical; }
+  button { background: #003366; border: 1px solid #00aaff; color: #00aaff; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.85rem; padding: 10px 20px; border-radius: 4px; transition: all 0.2s; }
+  button:hover:not(:disabled) { background: #004488; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.green { background: #003322; border-color: #00cc66; color: #00cc66; }
+  button.green:hover:not(:disabled) { background: #004433; }
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .step { padding: 6px 12px; border-radius: 20px; font-size: 0.75rem; border: 1px solid #1a2a3a; color: #446688; }
+  .step.active  { border-color: #00aaff; color: #00aaff; background: #001833; }
+  .step.done    { border-color: #00cc66; color: #00cc66; background: #001a0f; }
+  .step.failed  { border-color: #ff4444; color: #ff4444; background: #1a0000; }
+  .step.fallback{ border-color: #ffaa00; color: #ffaa00; background: #1a1000; }
+  pre { background: #050a10; border: 1px solid #1a2a3a; border-radius: 4px; padding: 12px; font-size: 0.75rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; color: #88bbdd; }
+  .label { color: #446688; font-size: 0.75rem; margin-bottom: 6px; margin-top: 12px; }
+  .address { color: #00cc66; font-size: 0.8rem; word-break: break-all; }
+  .error { color: #ff6666; font-size: 0.8rem; margin-top: 8px; }
+  .info  { color: #446688; font-size: 0.8rem; margin-top: 8px; }
+  .warn  { color: #ffaa00; font-size: 0.8rem; margin-top: 8px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #connectBtn { margin-bottom: 16px; }
+  .wallet { color: #00cc66; font-size: 0.8rem; margin-bottom: 16px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.7rem; }
+  .badge.approved  { background: #001a0f; border: 1px solid #00cc66; color: #00cc66; }
+  .badge.rejected  { background: #1a0000; border: 1px solid #ff4444; color: #ff4444; }
+  .badge.offchain  { background: #1a1000; border: 1px solid #ffaa00; color: #ffaa00; margin-left: 6px; }
+  .badge.claude    { background: #1a0a1a; border: 1px solid #cc66ff; color: #cc66ff; margin-left: 6px; }
+  .log-panel { background: #050a10; border: 1px solid #1a2a3a; border-radius: 4px; padding: 10px; max-height: 200px; overflow-y: auto; font-size: 0.72rem; color: #446688; margin-top: 12px; }
+  .log-line     { padding: 1px 0; }
+  .log-line.ok  { color: #00cc66; }
+  .log-line.err { color: #ff6666; }
+  .log-line.warn{ color: #ffaa00; }
+  #jobPanel  { display: none; }
+  #formPanel { display: block; }
+</style>
+</head>
+<body>
+
+<h1>AI Contract Forge // v3</h1>
+<p class="subtitle">On-chain AI first · Off-chain fallback · All audits on-chain · Powered by Somnia Agentic L1</p>
+
+<button id="connectBtn" onclick="connectWallet()">Connect Wallet</button>
+<div class="wallet" id="walletInfo" style="display:none"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+// TODO: update ORCHESTRATOR_ADDRESS after deploying PipelineOrchestratorV3
+const ORCHESTRATOR_ADDRESS = "0xD21f0262bE547Ac4d37979421e6Cb020FAD40B45";
+const COMPILER_API   = "https://dexsnip.site/solc";
+const BACKEND_URL    = "";
+const SOMNIA_CHAIN_ID = 50312;
+const SOMNIA_RPC     = "https://api.infra.testnet.somnia.network/";
+const EXPLORER       = "https://shannon-explorer.somnia.network";
+
+// Job states (must match JobState enum in PipelineOrchestratorV3)
+const S_BUILDING          = 0;
+const S_COMPILING         = 1;
+const S_AUDITING          = 2;
+const S_AWAITING_FALLBACK = 3;
+const S_APPROVED          = 4;
+const S_COMPLETE          = 5;
+const S_FAILED            = 6;
+</script>
+
+<div class="card" id="formPanel">
+  <h2>New Contract</h2>
+  <div class="label">1. Describe your contract idea</div>
+  <textarea id="ideaInput" placeholder="e.g. A simple voting app where anyone can submit a question and vote yes or no, one vote per person"></textarea>
+  <div class="label" style="margin-top:12px">2. Any extra features? <span style="color:#334455">(optional)</span></div>
+  <textarea id="featuresInput" placeholder="e.g. One vote per wallet, votes visible to everyone, owner can close voting"></textarea>
+  <div class="label" style="margin-top:12px">3. What should the frontend look like? <span style="color:#334455">(optional)</span></div>
+  <textarea id="frontendInput" placeholder="e.g. Show a live vote count, big submit button, list all questions on the left"></textarea>
+  <div class="label" style="margin-top:12px">Deposit required: <span id="depositAmt" style="color:#00aaff">loading...</span></div>
+  <div style="margin-top:12px">
+    <button id="submitBtn" onclick="submitIdea()" disabled>Submit Idea</button>
+  </div>
+  <div class="error" id="formError"></div>
+</div>
+
+<div class="card" id="jobPanel">
+  <h2>Pipeline // Job #<span id="jobIdDisplay">-</span></h2>
+
+  <div class="steps">
+    <div class="step" id="step-building">Building</div>
+    <div class="step" id="step-compiling">Compiling</div>
+    <div class="step" id="step-auditing">Auditing</div>
+    <div class="step" id="step-approved">Approved</div>
+    <div class="step" id="step-complete">Complete</div>
+  </div>
+
+  <div id="fallbackBanner" style="display:none" class="warn">
+    ⚡ On-chain agents escalated to Claude — building contract off-chain, will return for on-chain compile + audit...
+  </div>
+
+  <div class="label">Idea</div>
+  <div id="jobIdea" style="font-size:0.8rem; color:#88aacc; margin-bottom:8px"></div>
+
+  <div id="soliditySection" style="display:none">
+    <div class="label">
+      Generated Solidity
+      <span id="fixBadge" style="color:#888; font-size:0.7rem"></span>
+      <span id="offchainBadge" class="badge offchain" style="display:none">Claude Built</span>
+    </div>
+    <pre id="solidityCode"></pre>
+  </div>
+
+  <div id="auditSection" style="display:none">
+    <div class="label">
+      Contract Audit
+      <span id="auditBadge" class="badge"></span>
+      <span id="deferredBadge" class="badge claude" style="display:none">Deferred Audit</span>
+    </div>
+    <pre id="auditResult"></pre>
+  </div>
+
+  <div id="deploySection" style="display:none">
+    <div class="label" style="color:#00cc66">Contract approved — ready to deploy</div>
+    <div style="margin-top:8px">
+      <button class="green" id="deployBtn" onclick="deployContract()">Deploy to Somnia</button>
+    </div>
+    <div class="error" id="deployError"></div>
+  </div>
+
+  <div id="completeSection" style="display:none">
+    <div class="label">Deployed Contract</div>
+    <div class="address" id="deployedAddress"></div>
+    <div style="margin-top:8px">
+      <a id="explorerLink" href="#" target="_blank" style="color:#00aaff; font-size:0.8rem">View on Explorer →</a>
+    </div>
+
+    <div id="frontendSection" style="margin-top:16px">
+      <div class="label" style="color:#446688">Frontend</div>
+      <div id="frontendStatus" class="info">Building frontend via on-chain AI...</div>
+      <div id="frontendDownloadSection" style="display:none; margin-top:8px">
+        <div class="label" style="color:#00cc66">Frontend ready <span id="frontendAuditBadge" class="badge" style="display:none"></span></div>
+        <button class="green" style="margin-top:8px" onclick="downloadFrontend()">Download Frontend HTML</button>
+        <a id="frontendLink" href="#" target="_blank" style="color:#00aaff; font-size:0.8rem; margin-left:12px; display:none">Open Online →</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="failedSection" style="display:none">
+    <div style="color:#ff6666; font-size:0.85rem">Pipeline failed after all attempts. Try a simpler contract idea.</div>
+    <button style="margin-top:12px" onclick="resetToForm()">Try Again</button>
+  </div>
+
+  <div class="info" id="jobStatus"></div>
+
+  <div id="backendLogSection" style="display:none">
+    <div class="label" style="margin-top:16px">Backend Activity</div>
+    <div class="log-panel" id="backendLog"></div>
+  </div>
+
+  <div style="margin-top:16px; border-top:1px solid #1a2a3a; padding-top:12px">
+    <button style="font-size:0.75rem; padding:6px 12px; opacity:0.6" onclick="resetToForm()">Start New Job</button>
+  </div>
+</div>
+
+<script>
+// ── ABI ───────────────────────────────────────────────────────────────────────
+const ABI = [
+  {"name":"submitIdea","type":"function","inputs":[{"name":"idea","type":"string"}],"outputs":[],"stateMutability":"payable"},
+  {"name":"notifyDeployed","type":"function","inputs":[{"name":"jobId","type":"uint256"},{"name":"contractAddress","type":"address"}],"outputs":[],"stateMutability":"nonpayable"},
+  {"name":"depositRequired","type":"function","inputs":[],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"view"},
+  {"name":"jobCount","type":"function","inputs":[],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"view"},
+  {"name":"getJob","type":"function","inputs":[{"name":"jobId","type":"uint256"}],"outputs":[
+    {"name":"requester",          "type":"address"},
+    {"name":"state",              "type":"uint8"},
+    {"name":"idea",               "type":"string"},
+    {"name":"solidity",           "type":"string"},
+    {"name":"auditResult",        "type":"string"},
+    {"name":"deployedAddress",    "type":"address"},
+    {"name":"auditApproved",      "type":"bool"},
+    {"name":"fixAttempts",        "type":"uint8"},
+    {"name":"createdAt",          "type":"uint256"},
+    {"name":"offchainBuilt",      "type":"bool"},
+    {"name":"frontendUrl",        "type":"string"},
+    {"name":"frontendAuditPassed","type":"bool"}
+  ],"stateMutability":"view"},
+  {"name":"JobCreated",    "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true},{"name":"requester","type":"address","indexed":true},{"name":"idea","type":"string","indexed":false}]},
+  {"name":"SolidityReady", "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true}]},
+  {"name":"CompileResult", "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true},{"name":"success","type":"bool","indexed":false},{"name":"errors","type":"string","indexed":false}]},
+  {"name":"AuditResult",   "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true},{"name":"approved","type":"bool","indexed":false},{"name":"result","type":"string","indexed":false}]},
+  {"name":"ReadyToDeploy", "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true}]},
+  {"name":"JobComplete",   "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true},{"name":"contractAddress","type":"address","indexed":true}]},
+  {"name":"JobFailed",     "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true}]},
+  {"name":"JobFallback",   "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true}]},
+  {"name":"FrontendReady", "type":"event","inputs":[{"name":"jobId","type":"uint256","indexed":true},{"name":"frontendUrl","type":"string","indexed":false}]},
+];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let provider, signer, contract;
+let activeJobId = null, pollTimer = null, justSubmitted = false;
+let currentFrontendHtml = "", currentFrontendUrl = "";
+let backendStreamSource = null;
+
+// ── Wallet ────────────────────────────────────────────────────────────────────
+async function connectWallet() {
+  if (!window.ethereum) { alert("MetaMask required"); return; }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    const network = await provider.getNetwork();
+    if (Number(network.chainId) !== SOMNIA_CHAIN_ID) {
+      try {
+        await window.ethereum.request({ method:"wallet_switchEthereumChain", params:[{chainId:"0xC488"}] });
+      } catch {
+        await window.ethereum.request({ method:"wallet_addEthereumChain", params:[{
+          chainId:"0xC488", chainName:"Somnia Testnet",
+          nativeCurrency:{name:"STT",symbol:"STT",decimals:18},
+          rpcUrls:[SOMNIA_RPC], blockExplorerUrls:[EXPLORER]
+        }]});
+      }
+      provider = new ethers.BrowserProvider(window.ethereum);
+    }
+    signer   = await provider.getSigner();
+    contract = new ethers.Contract(ORCHESTRATOR_ADDRESS, ABI, signer);
+    const addr = await signer.getAddress();
+    document.getElementById("walletInfo").textContent = `Connected: ${addr}`;
+    document.getElementById("walletInfo").style.display = "block";
+    document.getElementById("connectBtn").style.display = "none";
+    document.getElementById("submitBtn").disabled = false;
+    await loadDeposit();
+    await checkExistingJob();
+    subscribeToEvents();
+  } catch(e) { alert("Connection failed: " + e.message); }
+}
+
+async function loadDeposit() {
+  try {
+    const dep = await contract.depositRequired();
+    document.getElementById("depositAmt").textContent = ethers.formatEther(dep) + " STT";
+  } catch {}
+}
+
+// ── Submit idea ───────────────────────────────────────────────────────────────
+async function submitIdea() {
+  const idea     = document.getElementById("ideaInput").value.trim();
+  const features = document.getElementById("featuresInput").value.trim();
+  const frontend = document.getElementById("frontendInput").value.trim();
+  if (!idea) { document.getElementById("formError").textContent = "Enter an idea first"; return; }
+  let combined = idea;
+  if (features) combined += `\n\nExtra features: ${features}`;
+  if (frontend) combined += `\n\nFrontend: ${frontend}`;
+  document.getElementById("formError").textContent = "";
+  document.getElementById("submitBtn").disabled = true;
+  justSubmitted = true;
+  try {
+    const deposit = await contract.depositRequired();
+    const tx = await contract.submitIdea(combined, { value: deposit });
+    setStatus("Transaction submitted — waiting for confirmation...");
+    const receipt = await tx.wait();
+    const iface = new ethers.Interface(ABI);
+    for (const log of receipt.logs) {
+      try {
+        const parsed = iface.parseLog(log);
+        if (parsed.name === "JobCreated") {
+          activeJobId = Number(parsed.args.jobId);
+          showJobPanel(activeJobId);
+          startPolling();
+          registerBackendWatch(activeJobId);
+          return;
+        }
+      } catch {}
+    }
+  } catch(e) {
+    justSubmitted = false;
+    document.getElementById("formError").textContent = e.message;
+    document.getElementById("submitBtn").disabled = false;
+  }
+}
+
+// ── Backend watch registration ────────────────────────────────────────────────
+async function registerBackendWatch(jobId) {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/v3/watch`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ jobId, orchestrator: ORCHESTRATOR_ADDRESS }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.streamUrl) startBackendStream(data.streamUrl);
+    }
+  } catch {
+    // Backend not running — silent, on-chain happy path still works
+  }
+}
+
+function startBackendStream(url) {
+  if (backendStreamSource) backendStreamSource.close();
+  backendStreamSource = new EventSource(`${BACKEND_URL}${url}`);
+  backendStreamSource.onmessage = (e) => {
+    const evt = JSON.parse(e.data);
+    if (evt.type === "PING") return;
+    appendBackendLog(evt);
+
+    if (evt.type === "STATE_CHANGE") updateJobDisplay(activeJobId);
+    if (evt.type === "FALLBACK")     showFallbackBanner();
+    if (evt.type === "FRONTEND_URL") showFrontendUrl(evt.url);
+  };
+  document.getElementById("backendLogSection").style.display = "block";
+}
+
+function appendBackendLog(evt) {
+  const panel = document.getElementById("backendLog");
+  const line  = document.createElement("div");
+  line.className = "log-line" + (evt.ok ? " ok" : evt.error ? " err" : evt.type === "FALLBACK" ? " warn" : "");
+  line.textContent = evt.msg || evt.type + (evt.label ? ": " + evt.label : "");
+  panel.appendChild(line);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+// ── Existing job resume ───────────────────────────────────────────────────────
+async function checkExistingJob() {
+  if (justSubmitted) return;
+  try {
+    const count = Number(await contract.jobCount());
+    const addr  = (await signer.getAddress()).toLowerCase();
+    for (let i = count - 1; i >= Math.max(0, count - 20); i--) {
+      const job   = await contract.getJob(i);
+      const state = Number(job.state);
+      const age   = Math.floor(Date.now() / 1000) - Number(job.createdAt);
+      const stuck = state === S_BUILDING && age > 600;
+      if (job.requester.toLowerCase() === addr && state < S_COMPLETE && !stuck) {
+        activeJobId = i;
+        showJobPanel(i);
+        await updateJobDisplay(i);
+        startPolling();
+        registerBackendWatch(i);
+        return;
+      }
+      // Also resume complete jobs (with or without frontend)
+      if (job.requester.toLowerCase() === addr && state === S_COMPLETE) {
+        activeJobId = i;
+        showJobPanel(i);
+        await updateJobDisplay(i);
+        if (!job.frontendUrl) registerBackendWatch(i);
+        return;
+      }
+    }
+  } catch {}
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function clearJobPanel() {
+  ["soliditySection","auditSection","deploySection","completeSection","failedSection"].forEach(id => {
+    document.getElementById(id).style.display = "none";
+  });
+  document.getElementById("frontendDownloadSection").style.display = "none";
+  document.getElementById("fallbackBanner").style.display = "none";
+  document.getElementById("backendLogSection").style.display = "none";
+  document.getElementById("offchainBadge").style.display = "none";
+  document.getElementById("deferredBadge").style.display = "none";
+  document.getElementById("solidityCode").textContent = "";
+  document.getElementById("auditResult").textContent  = "";
+  document.getElementById("fixBadge").textContent     = "";
+  document.getElementById("jobIdea").textContent      = "";
+  document.getElementById("jobStatus").textContent    = "";
+  currentFrontendHtml = "";
+  currentFrontendUrl  = "";
+  updateSteps(-1);
+}
+
+function showJobPanel(jobId) {
+  clearJobPanel();
+  document.getElementById("formPanel").style.display = "none";
+  document.getElementById("jobPanel").style.display  = "block";
+  document.getElementById("jobIdDisplay").textContent = jobId;
+}
+
+function resetToForm() {
+  if (backendStreamSource) { backendStreamSource.close(); backendStreamSource = null; }
+  cancelFrontendTimeout();
+  cancelAuditBadgePoll();
+  activeJobId = null;
+  stopPolling();
+  clearJobPanel();
+  document.getElementById("jobPanel").style.display  = "none";
+  document.getElementById("formPanel").style.display = "block";
+  document.getElementById("ideaInput").value = "";
+  document.getElementById("submitBtn").disabled = false;
+  justSubmitted = false;
+}
+
+function setStatus(msg) { document.getElementById("jobStatus").textContent = msg; }
+
+function showFallbackBanner() {
+  document.getElementById("fallbackBanner").style.display = "block";
+}
+
+function showFrontendUrl(url) {
+  cancelFrontendTimeout();
+  currentFrontendUrl = url;
+  document.getElementById("frontendStatus").textContent  = "";
+  document.getElementById("frontendDownloadSection").style.display = "block";
+  const link = document.getElementById("frontendLink");
+  link.href  = url;
+  link.style.display = "inline";
+  startAuditBadgePoll();
+}
+
+function showAuditBadge() {
+  const ab = document.getElementById("frontendAuditBadge");
+  ab.textContent   = "Audited";
+  ab.className     = "badge approved";
+  ab.style.display = "inline-block";
+}
+
+let _auditBadgeTimer = null;
+const AUDIT_BADGE_INTERVAL = 8000;
+const AUDIT_BADGE_TIMEOUT  = 5 * 60 * 1000;
+
+function startAuditBadgePoll() {
+  const ab = document.getElementById("frontendAuditBadge");
+  if (ab && ab.style.display !== "none") return; // already showing
+  if (_auditBadgeTimer) return;
+  const deadline = Date.now() + AUDIT_BADGE_TIMEOUT;
+  _auditBadgeTimer = setInterval(async () => {
+    if (Date.now() > deadline || activeJobId === null) { cancelAuditBadgePoll(); return; }
+    try {
+      const job = await contract.getJob(activeJobId);
+      if (job.frontendAuditPassed) {
+        showAuditBadge();
+        cancelAuditBadgePoll();
+      }
+    } catch {}
+  }, AUDIT_BADGE_INTERVAL);
+}
+
+function cancelAuditBadgePoll() {
+  if (_auditBadgeTimer) { clearInterval(_auditBadgeTimer); _auditBadgeTimer = null; }
+}
+
+function updateSteps(state) {
+  // Steps: building(0), compiling(1), auditing(2), approved(4), complete(5)
+  // AwaitingFallback(3) shows as auditing-fallback
+  const ids    = ["building","compiling","auditing","approved","complete"];
+  const states = [0, 1, 2, 4, 5];
+  ids.forEach((s, i) => {
+    const el = document.getElementById("step-" + s);
+    if (!el) return;
+    el.className = "step";
+    if (state === S_FAILED) {
+      el.classList.add(i === 4 ? "failed" : "done");
+    } else if (state === S_AWAITING_FALLBACK && s === "auditing") {
+      el.classList.add("fallback");
+    } else {
+      const stateIdx = states.indexOf(state);
+      if (stateIdx === -1) return;
+      if (i < stateIdx) el.classList.add("done");
+      else if (i === stateIdx) el.classList.add("active");
+    }
+  });
+}
+
+// ── Main job display ──────────────────────────────────────────────────────────
+async function updateJobDisplay(jobId) {
+  try {
+    const job   = await contract.getJob(jobId);
+    const state = Number(job.state);
+    document.getElementById("jobIdea").textContent = job.idea;
+    updateSteps(state);
+
+    if (job.solidity) {
+      document.getElementById("soliditySection").style.display = "block";
+      document.getElementById("solidityCode").textContent = job.solidity.replace(/\\n/g, "\n");
+      if (Number(job.fixAttempts) > 0) {
+        document.getElementById("fixBadge").textContent = `(fix attempt ${job.fixAttempts})`;
+      }
+      if (job.offchainBuilt) {
+        document.getElementById("offchainBadge").style.display = "inline-block";
+      }
+    }
+
+    if (job.auditResult) {
+      document.getElementById("auditSection").style.display = "block";
+      document.getElementById("auditResult").textContent = job.auditResult;
+      const badge = document.getElementById("auditBadge");
+      badge.textContent  = job.auditApproved ? "APPROVED" : "ISSUES FOUND";
+      badge.className    = "badge " + (job.auditApproved ? "approved" : "rejected");
+      if (job.offchainBuilt) {
+        document.getElementById("deferredBadge").style.display = "inline-block";
+      }
+    }
+
+    if (state === S_AWAITING_FALLBACK) {
+      showFallbackBanner();
+    }
+
+    if (state === S_APPROVED) {
+      document.getElementById("deploySection").style.display = "block";
+    }
+
+    if (state === S_COMPLETE) {
+      document.getElementById("deploySection").style.display  = "none";
+      document.getElementById("completeSection").style.display = "block";
+      const addr = job.deployedAddress;
+      document.getElementById("deployedAddress").textContent = addr;
+      document.getElementById("explorerLink").href = `${EXPLORER}/address/${addr}`;
+
+      if (job.frontendUrl) {
+        showFrontendUrl(job.frontendUrl);
+        if (job.frontendAuditPassed) {
+          showAuditBadge();
+          cancelAuditBadgePoll();
+        }
+      }
+
+      if (!job.frontendUrl) {
+        document.getElementById("frontendStatus").textContent = "Building frontend via on-chain AI...";
+        startFrontendTimeout();
+      }
+    }
+
+    if (state === S_FAILED) {
+      document.getElementById("failedSection").style.display = "block";
+      stopPolling();
+    }
+
+    const statusMsg = {
+      [S_BUILDING]:          "Building contract with Qwen3-30B...",
+      [S_COMPILING]:         "Compiling on-chain via JSON API agent...",
+      [S_AUDITING]:          "Auditing contract with Qwen3-30B...",
+      [S_AWAITING_FALLBACK]: "On-chain agents escalated — Claude building contract...",
+      [S_APPROVED]:          "Audit passed — deploy when ready",
+      [S_COMPLETE]:          "Contract deployed",
+      [S_FAILED]:            "Pipeline failed",
+    };
+    setStatus(statusMsg[state] || "");
+
+    if (state >= S_COMPLETE) stopPolling();
+  } catch(e) { setStatus("Error loading job: " + e.message); }
+}
+
+// ── Deploy ────────────────────────────────────────────────────────────────────
+async function deployContract() {
+  document.getElementById("deployBtn").disabled = true;
+  document.getElementById("deployError").textContent = "";
+  try {
+    setStatus("Fetching compiled artifacts...");
+    const res = await fetch(`${COMPILER_API}/job/${activeJobId}/artifacts?orch=${ORCHESTRATOR_ADDRESS}`);
+    if (!res.ok) throw new Error("Compiler API unavailable — try again shortly");
+    const artifacts = await res.json();
+    if (artifacts.error) throw new Error(artifacts.error);
+
+    const factory  = new ethers.ContractFactory(artifacts.abi, artifacts.bytecode, signer);
+    setStatus("Deploying via MetaMask...");
+    const deployed = await factory.deploy();
+    setStatus("Waiting for confirmation...");
+    await deployed.waitForDeployment();
+    const address = await deployed.getAddress();
+
+    setStatus("Notifying orchestrator...");
+    const tx = await contract.notifyDeployed(activeJobId, address);
+    await tx.wait();
+
+    // Generate fallback frontend from ABI (shown immediately while on-chain frontend builds)
+    const idea = document.getElementById("jobIdea").textContent;
+    currentFrontendHtml = generateFrontendHtml(artifacts.abi, address, idea);
+
+    document.getElementById("deploySection").style.display   = "none";
+    document.getElementById("completeSection").style.display = "block";
+    document.getElementById("deployedAddress").textContent   = address;
+    document.getElementById("explorerLink").href = `${EXPLORER}/address/${address}`;
+    document.getElementById("frontendStatus").textContent = "Building frontend via on-chain AI...";
+    setStatus("Contract deployed — building frontend...");
+    startFrontendTimeout();
+  } catch(e) {
+    document.getElementById("deployError").textContent = e.message;
+    document.getElementById("deployBtn").disabled = false;
+  }
+}
+
+// ── Download frontend ─────────────────────────────────────────────────────────
+function downloadFrontend() {
+  if (!currentFrontendUrl) return;
+  const a = document.createElement("a");
+  a.href = currentFrontendUrl + "?dl=1";
+  a.download = "dapp-frontend.html";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function _triggerDownload(html) {
+  const blob = new Blob([html], { type:"text/html" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = "dapp-frontend.html";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ── Frontend template (fallback — used while on-chain version builds) ─────────
+function generateFrontendHtml(abi, contractAddress, idea) {
+  const abiJson = JSON.stringify(abi);
+  const title   = idea ? idea.replace(/[<>"]/g, "").slice(0, 60) : "My Dapp";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${title}</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"><\/script>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#0a0a0f; color:#c8d8e8; font-family:'Courier New',monospace; padding:24px; max-width:800px; margin:0 auto; }
+  h1 { color:#00aaff; font-size:1.2rem; margin-bottom:4px; }
+  h2 { color:#00aaff; font-size:0.85rem; margin:28px 0 12px; text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid #1a2a3a; padding-bottom:8px; }
+  h3 { color:#88aacc; font-size:0.85rem; margin-bottom:10px; }
+  .meta { color:#446688; font-size:0.75rem; margin-bottom:24px; word-break:break-all; }
+  .card { background:#0f1520; border:1px solid #1a2a3a; border-radius:8px; padding:16px; margin-bottom:10px; }
+  .label { color:#446688; font-size:0.72rem; margin-bottom:4px; margin-top:10px; }
+  input { background:#0a0f1a; border:1px solid #1a2a3a; color:#c8d8e8; font-family:'Courier New',monospace; font-size:0.82rem; padding:8px; border-radius:4px; width:100%; }
+  button { background:#003366; border:1px solid #00aaff; color:#00aaff; cursor:pointer; font-family:'Courier New',monospace; font-size:0.82rem; padding:8px 16px; border-radius:4px; margin-top:10px; }
+  button.write { background:#003322; border-color:#00cc66; color:#00cc66; }
+  .result { color:#00cc66; font-size:0.8rem; margin-top:8px; word-break:break-all; }
+  .err { color:#ff6666; font-size:0.75rem; margin-top:6px; }
+  .stat { color:#446688; font-size:0.75rem; margin-top:6px; }
+  #wallet { color:#00cc66; font-size:0.78rem; margin-bottom:24px; }
+</style>
+</head>
+<body>
+<h1>// ${title}</h1>
+<div class="meta">${contractAddress} · Somnia Testnet</div>
+<button id="connectBtn" onclick="connectWallet()">Connect Wallet</button>
+<div id="wallet"></div>
+<div id="readSection"></div>
+<div id="writeSection"></div>
+<script>
+var CONTRACT_ADDRESS="${contractAddress}";
+var ABI=${abiJson};
+var CHAIN_ID=50312;
+var SOMNIA_RPC="https://api.infra.testnet.somnia.network/";
+var provider,signer,contract;
+async function connectWallet(){
+  if(!window.ethereum){alert("MetaMask required");return;}
+  provider=new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts",[]);
+  var net=await provider.getNetwork();
+  if(Number(net.chainId)!==CHAIN_ID){
+    try{await window.ethereum.request({method:"wallet_switchEthereumChain",params:[{chainId:"0xC488"}]});}
+    catch(e){await window.ethereum.request({method:"wallet_addEthereumChain",params:[{chainId:"0xC488",chainName:"Somnia Testnet",nativeCurrency:{name:"STT",symbol:"STT",decimals:18},rpcUrls:[SOMNIA_RPC],blockExplorerUrls:["https://shannon-explorer.somnia.network"]}]});}
+    provider=new ethers.BrowserProvider(window.ethereum);
+  }
+  signer=await provider.getSigner();
+  contract=new ethers.Contract(CONTRACT_ADDRESS,ABI,signer);
+  var addr=await signer.getAddress();
+  document.getElementById("wallet").textContent="Connected: "+addr;
+  document.getElementById("connectBtn").style.display="none";
+}
+var readFns=ABI.filter(function(f){return f.type==="function"&&(f.stateMutability==="view"||f.stateMutability==="pure");});
+var writeFns=ABI.filter(function(f){return f.type==="function"&&f.stateMutability!=="view"&&f.stateMutability!=="pure";});
+function coerce(val,type){if(type==="bool")return val==="true"||val==="1";return val;}
+function buildSection(fns,sectionId,isWrite){
+  var section=document.getElementById(sectionId);
+  if(!fns.length)return;
+  var h2=document.createElement("h2");h2.textContent=isWrite?"Write":"Read";section.appendChild(h2);
+  fns.forEach(function(fn,fi){
+    var card=document.createElement("div");card.className="card";
+    var h3=document.createElement("h3");h3.textContent=fn.name;card.appendChild(h3);
+    var argMeta=[];
+    fn.inputs.forEach(function(inp,ii){
+      var lbl=document.createElement("div");lbl.className="label";lbl.textContent=(inp.name||"arg"+ii)+" ("+inp.type+")";card.appendChild(lbl);
+      var input=document.createElement("input");var id=(isWrite?"w":"r")+fi+"_"+ii;input.id=id;input.placeholder=inp.type;card.appendChild(input);
+      argMeta.push({id:id,type:inp.type});
+    });
+    var valId=null;
+    if(isWrite&&fn.stateMutability==="payable"){
+      var lbl2=document.createElement("div");lbl2.className="label";lbl2.textContent="value (STT)";card.appendChild(lbl2);
+      valId="w"+fi+"_val";var valInput=document.createElement("input");valInput.id=valId;valInput.placeholder="0.0";card.appendChild(valInput);
+    }
+    var btn=document.createElement("button");btn.textContent=isWrite?"Send":"Call";if(isWrite)btn.className="write";
+    var resultId=(isWrite?"w":"r")+fi+"_res",statusId=(isWrite?"w":"r")+fi+"_stat";
+    var argMetaCopy=argMeta.slice(),fnName=fn.name;
+    btn.addEventListener("click",function(){isWrite?sendTx(fnName,argMetaCopy,valId,statusId,resultId):callRead(fnName,argMetaCopy,resultId,statusId);});
+    card.appendChild(btn);
+    var res=document.createElement("div");res.id=resultId;res.className="result";card.appendChild(res);
+    var stat=document.createElement("div");stat.id=statusId;stat.className=isWrite?"stat":"err";card.appendChild(stat);
+    section.appendChild(card);
+  });
+}
+async function callRead(fnName,argMeta,resultId,statusId){
+  if(!contract){document.getElementById(statusId).textContent="Connect wallet first";return;}
+  var args=argMeta.map(function(m){return coerce(document.getElementById(m.id).value,m.type);});
+  try{
+    document.getElementById(statusId).textContent="";
+    var result=await contract[fnName](...args);
+    var out;
+    if(result!==null&&typeof result==="object"&&typeof result.length==="number"){var parts=[];for(var i=0;i<result.length;i++)parts.push(result[i].toString());out=parts.join(", ");}
+    else{out=result.toString();}
+    document.getElementById(resultId).textContent=out;
+  }catch(e){document.getElementById(statusId).textContent=e.reason||e.message;}
+}
+async function sendTx(fnName,argMeta,valId,statusId,resultId){
+  if(!contract){document.getElementById(statusId).textContent="Connect wallet first";return;}
+  var args=argMeta.map(function(m){return coerce(document.getElementById(m.id).value,m.type);});
+  var opts={};
+  if(valId){var v=document.getElementById(valId).value;if(v)opts.value=ethers.parseEther(v);}
+  try{
+    document.getElementById(statusId).textContent="Sending...";document.getElementById(resultId).textContent="";
+    var tx=await contract[fnName](...args,opts);
+    document.getElementById(statusId).textContent="Confirming...";
+    var receipt=await tx.wait();
+    document.getElementById(statusId).textContent="Done!";document.getElementById(resultId).textContent="Tx: "+receipt.hash;
+  }catch(e){document.getElementById(statusId).textContent=e.reason||e.message;}
+}
+window.addEventListener("DOMContentLoaded",function(){buildSection(readFns,"readSection",false);buildSection(writeFns,"writeSection",true);});
+<\/script>
+</body>
+</html>`;
+}
+
+// ── Event subscriptions ───────────────────────────────────────────────────────
+function subscribeToEvents() {
+  if (!contract) return;
+  contract.on("SolidityReady",  (jobId) => { if (Number(jobId)===activeJobId) updateJobDisplay(activeJobId); });
+  contract.on("CompileResult",  (jobId) => { if (Number(jobId)===activeJobId) updateJobDisplay(activeJobId); });
+  contract.on("AuditResult",    (jobId) => { if (Number(jobId)===activeJobId) updateJobDisplay(activeJobId); });
+  contract.on("ReadyToDeploy",  (jobId) => { if (Number(jobId)===activeJobId) updateJobDisplay(activeJobId); });
+  contract.on("JobComplete",    (jobId) => { if (Number(jobId)===activeJobId) updateJobDisplay(activeJobId); });
+  contract.on("JobFailed",      (jobId) => { if (Number(jobId)===activeJobId) updateJobDisplay(activeJobId); });
+  contract.on("JobFallback",    (jobId) => { if (Number(jobId)===activeJobId) { showFallbackBanner(); updateJobDisplay(activeJobId); } });
+  contract.on("FrontendReady",  (jobId, url) => { if (Number(jobId)===activeJobId) showFrontendUrl(url); });
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => { if (activeJobId !== null) updateJobDisplay(activeJobId); }, 8000);
+  updateJobDisplay(activeJobId);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+let _frontendTimeoutTimer = null;
+const FRONTEND_UI_TIMEOUT = 120000; // 2 minutes
+
+function startFrontendTimeout() {
+  if (_frontendTimeoutTimer || currentFrontendUrl) return;  // already running or already done
+  _frontendTimeoutTimer = setTimeout(() => {
+    if (!currentFrontendUrl) {
+      document.getElementById("frontendStatus").textContent = "On-chain frontend timed out — Claude building...";
+    }
+  }, FRONTEND_UI_TIMEOUT);
+}
+
+function cancelFrontendTimeout() {
+  if (_frontendTimeoutTimer) { clearTimeout(_frontendTimeoutTimer); _frontendTimeoutTimer = null; }
+}
+</script>
+</body>
+</html>
