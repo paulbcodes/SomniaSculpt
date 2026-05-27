@@ -25,6 +25,25 @@ _STATS_ABI = [
         "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     },
+    {
+        "name": "requestIds",
+        "type": "function",
+        "inputs": [{"name": "", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "insights",
+        "type": "function",
+        "inputs": [{"name": "", "type": "uint256"}],
+        "outputs": [
+            {"name": "emitter",   "type": "address"},
+            {"name": "topic0",    "type": "bytes32"},
+            {"name": "text",      "type": "string"},
+            {"name": "timestamp", "type": "uint256"},
+        ],
+        "stateMutability": "view",
+    },
 ]
 
 _HANDLER_ABI = [
@@ -188,3 +207,34 @@ def subscribe_to_events(user_contract_address: str) -> str:
 
     receipt = _send(w3, account, tx)
     return receipt.transactionHash.hex()
+
+
+def get_recent_insights(n: int = 10) -> list:
+    """Return the last n insights from ReactiveHandler, newest first."""
+    try:
+        w3 = _w3()
+        handler = w3.eth.contract(
+            address=Web3.to_checksum_address(REACTIVE_HANDLER_ADDRESS),
+            abi=_STATS_ABI,
+        )
+        count = handler.functions.requestCount().call()
+        if count == 0:
+            return []
+        start = max(0, count - n)
+        results = []
+        for i in range(count - 1, start - 1, -1):
+            try:
+                request_id = handler.functions.requestIds(i).call()
+                insight = handler.functions.insights(request_id).call()
+                emitter, _, text, timestamp = insight
+                if text:
+                    results.append({
+                        "emitter": emitter,
+                        "text": text,
+                        "timestamp": int(timestamp),
+                    })
+            except Exception:
+                continue
+        return results
+    except Exception:
+        return []

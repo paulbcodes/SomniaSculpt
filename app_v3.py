@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request, send_file, stream_with_context
 
 import pipeline_v3
+from tools.reactive_registrar import get_stats as _get_reactive_stats, get_recent_insights
 
 load_dotenv()
 
@@ -37,6 +38,18 @@ def serve_frontend(job_id: int):
         return send_file(path, mimetype="text/html", as_attachment=True,
                          download_name="dapp-frontend.html")
     return send_file(path, mimetype="text/html")
+
+
+# ── Platform stats & insights ─────────────────────────────────────────────────
+@app.route("/api/v3/stats")
+def stats():
+    return jsonify(_get_reactive_stats())
+
+
+@app.route("/api/v3/insights")
+def insights():
+    n = min(int(request.args.get("n", 10)), 50)
+    return jsonify(get_recent_insights(n))
 
 
 # ── Watch registration ────────────────────────────────────────────────────────

@@ -24,6 +24,7 @@ Rules:
   - write functions: form inputs for each parameter + a submit button that sends the transaction
 - Embed the contract address, ABI, and expected chain ID as JS constants at the top of the script
 - On wallet connect AND on every write transaction, check the connected chain ID matches the expected chain ID — if not, show a clear error message telling the user to switch networks. Do not proceed with the transaction if on the wrong network.
+- INDEXING: Solidity contracts use two storage patterns — check the ABI carefully. If the contract has a counter variable (e.g. questionCount, proposalCount, itemCount) it uses a mapping with 1-based IDs: iterate from 1 to N inclusive. If it uses an array (getter takes a uint index, no counter), iterate from 0 to length-1. Never assume — derive it from the ABI.
 - CRITICAL: The ABI is the absolute source of truth. Use the exact function names, parameter names, and parameter types from the ABI — never from the spec description. If the spec says 'createToken' but the ABI says 'deployToken', use 'deployToken'. If the spec says separate buyTax/sellTax but the ABI has a single taxPercent, use taxPercent. The spec describes intent; the ABI describes reality.
 - Never call any function not present in the ABI. Do not assume name(), symbol(), decimals() or any standard interface functions exist unless they are in the ABI.
 - Handle errors gracefully — show user-friendly messages, not raw exceptions

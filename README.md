@@ -6,12 +6,6 @@ Built for the Somnia Agentic L1 Hackathon.
 
 ---
 
-## Live Demo
-
-> Link available at final submission.
-
----
-
 ## What It Does
 
 Somnia Sculpt turns a plain-English description into a live, deployed smart contract and working dapp frontend. You describe what you want — a token, a voting system, an NFT drop, anything. On-chain AI agents write the Solidity, verify it compiles, audit it for security issues, and generate a usable dapp interface. You deploy with one MetaMask click. The full build and audit trail is stored on-chain and verifiable by anyone.
@@ -29,7 +23,7 @@ Contract generation, security auditing, and frontend generation are all handled 
 After the LLM agent writes Solidity, a JSON API agent calls an external compile service to verify the code compiles cleanly. The result — success or error message — comes back to the contract on-chain. The contract then decides whether to retry, fix, or proceed to audit.
 
 ### Autonomous On-Chain State Machine
-`PipelineOrchestratorV3` drives the entire pipeline without human intervention:
+`PipelineOrchestratorV3d` drives the entire pipeline without human intervention:
 
 ```
 Building → Compiling → Auditing → Approved → [user deploys] → Complete
@@ -52,7 +46,7 @@ This is the full loop: user contract fires an event → precompile triggers → 
 User (browser)
     │  describe idea
     ▼
-PipelineOrchestratorV3.sol
+PipelineOrchestratorV3d.sol
     │
     ├── createRequest() ──▶  Somnia LLM Agent    (write Solidity)
     │   ◀── handleResponse()
@@ -96,7 +90,7 @@ PipelineOrchestratorV3.sol
 
 | Contract | Address |
 |---|---|
-| PipelineOrchestratorV3 | `0xD21f0262bE547Ac4d37979421e6Cb020FAD40B45` |
+| PipelineOrchestratorV3d | `0xe5E61535d586d2132B8Ee45E28e67eAEaFD2a8F7` |
 | ReactiveHandler | `0x3BdF983FAd09D2a2b72b7a8eA10A0ef45d9172C2` |
 
 ---
@@ -123,12 +117,13 @@ Our fallback architecture was built with exactly this transition in mind. The fa
 
 ```
 contracts/
-  PipelineOrchestratorV3.sol   # on-chain state machine
+  PipelineOrchestratorV3d.sol  # on-chain state machine
   ReactiveHandler.sol          # Reactivity precompile handler
 agents/
   builder.py                   # fallback: contract builder
   auditor.py                   # fallback: security auditor
   frontend_builder.py          # fallback: frontend generator
+  frontend_auditor.py          # fallback: frontend security auditor
 tools/
   reactive_registrar.py        # registers contracts with Reactivity precompile
   somnia_monitor.py            # somnia_watch WebSocket listener
@@ -144,8 +139,7 @@ pipeline_v3.py                 # fallback watcher
 
 ## Roadmap
 
-- **ReactiveHandler V3 integration** — wire autonomous event monitoring into the V3 pipeline so all deployed contracts are automatically subscribed to the Reactivity precompile
 - **On-chain frontend generation** — becomes fully viable when Somnia's per-request pricing ships; fallback path will be retired
 - **Prompt routing** — use the audit result to select a specialised fix prompt (reentrancy failure, access control failure, arithmetic issue each get a targeted prompt); agent output driving agent selection is a natural next step for the state machine
 - **Prompt tuning** — reduce false positive audit failures through targeted prompt refinement once more test data is collected
-- **UI improvements** — session persistence, richer status feedback, mobile layout
+- **UI improvements** — richer status feedback

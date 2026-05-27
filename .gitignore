@@ -7,3 +7,6 @@ venv/
 output/
 *.log
 .DS_Store
+copy_prompts_v3_to_v3b.py
+contracts/PipelineOrchestratorV3b.sol
+contracts/PipelineOrchestratorV3c.sol

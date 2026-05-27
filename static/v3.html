@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Contract Forge — v3</title>
+<title>Somnia Sculpt</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,6 +33,15 @@
   .warn  { color: #ffaa00; font-size: 0.8rem; margin-top: 8px; }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   #connectBtn { margin-bottom: 16px; }
+  .stats-bar { color: #334455; font-size: 0.75rem; margin-bottom: 20px; }
+  .stats-bar span { color: #00aaff; }
+  .layout { display: flex; gap: 20px; align-items: flex-start; }
+  .main-col { flex: 1; min-width: 0; }
+  .side-col { width: 300px; flex-shrink: 0; }
+  .insight-card { border-left: 2px solid #00aaff; padding: 8px 10px; margin-bottom: 10px; background: #050a10; border-radius: 0 4px 4px 0; }
+  .insight-card .insight-text { color: #c8d8e8; font-size: 0.8rem; line-height: 1.5; }
+  .insight-card .insight-time { color: #334455; font-size: 0.7rem; margin-top: 4px; }
+  @media (max-width: 900px) { .layout { flex-direction: column; } .side-col { width: 100%; } }
   .wallet { color: #00cc66; font-size: 0.8rem; margin-bottom: 16px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.7rem; }
   .badge.approved  { background: #001a0f; border: 1px solid #00cc66; color: #00cc66; }
@@ -50,8 +59,9 @@
 </head>
 <body>
 
-<h1>AI Contract Forge // v3</h1>
-<p class="subtitle">On-chain AI first · Off-chain fallback · All audits on-chain · Powered by Somnia Agentic L1</p>
+<div style="text-align:center; margin-bottom:8px"><img src="/static/logo.jpg" alt="Somnia Sculpt" style="max-height:80px; width:auto"></div>
+<p class="subtitle" style="text-align:center">On-chain AI first · Off-chain fallback · All audits on-chain · Powered by Somnia Agentic L1</p>
+<div class="stats-bar"><span id="statContracts">—</span> contracts built on Somnia &nbsp;·&nbsp; <span id="statInsights">—</span> on-chain AI insights generated</div>
 
 <button id="connectBtn" onclick="connectWallet()">Connect Wallet</button>
 <div class="wallet" id="walletInfo" style="display:none"></div>
@@ -59,8 +69,8 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 // TODO: update ORCHESTRATOR_ADDRESS after deploying PipelineOrchestratorV3
-const ORCHESTRATOR_ADDRESS = "0xD21f0262bE547Ac4d37979421e6Cb020FAD40B45";
-const COMPILER_API   = "https://dexsnip.site/solc";
+const ORCHESTRATOR_ADDRESS = "0xe5E61535d586d2132B8Ee45E28e67eAEaFD2a8F7";
+const COMPILER_API   = "https://somniasculpt.site/solc";
 const BACKEND_URL    = "";
 const SOMNIA_CHAIN_ID = 50312;
 const SOMNIA_RPC     = "https://api.infra.testnet.somnia.network/";
@@ -76,6 +86,8 @@ const S_COMPLETE          = 5;
 const S_FAILED            = 6;
 </script>
 
+<div class="layout">
+<div class="main-col">
 <div class="card" id="formPanel">
   <h2>New Contract</h2>
   <div class="label">1. Describe your contract idea</div>
@@ -103,7 +115,7 @@ const S_FAILED            = 6;
   </div>
 
   <div id="fallbackBanner" style="display:none" class="warn">
-    ⚡ On-chain agents escalated to Claude — building contract off-chain, will return for on-chain compile + audit...
+    ⚡ On-chain agents escalated to fallback layer — building contract off-chain, will return for on-chain compile + audit...
   </div>
 
   <div class="label">Idea</div>
@@ -113,7 +125,7 @@ const S_FAILED            = 6;
     <div class="label">
       Generated Solidity
       <span id="fixBadge" style="color:#888; font-size:0.7rem"></span>
-      <span id="offchainBadge" class="badge offchain" style="display:none">Claude Built</span>
+      <span id="offchainBadge" class="badge offchain" style="display:none">Fallback Built</span>
     </div>
     <pre id="solidityCode"></pre>
   </div>
@@ -168,6 +180,17 @@ const S_FAILED            = 6;
   <div style="margin-top:16px; border-top:1px solid #1a2a3a; padding-top:12px">
     <button style="font-size:0.75rem; padding:6px 12px; opacity:0.6" onclick="resetToForm()">Start New Job</button>
   </div>
+</div>
+</div>
+<div class="side-col">
+  <div class="card" id="insightsPanel">
+    <h2>On-Chain AI</h2>
+    <div id="insightsPlaceholder" class="info" style="font-size:0.78rem; line-height:1.5; margin-top:8px">
+      Deploy your contract to activate on-chain AI monitoring. Every event your contract emits will be analysed by a Somnia AI agent and explained here in plain English.
+    </div>
+    <div id="insightsList" style="margin-top:12px"></div>
+  </div>
+</div>
 </div>
 
 <script>
@@ -312,6 +335,7 @@ function startBackendStream(url) {
     if (evt.type === "STATE_CHANGE") updateJobDisplay(activeJobId);
     if (evt.type === "FALLBACK")     showFallbackBanner();
     if (evt.type === "FRONTEND_URL") showFrontendUrl(evt.url);
+    if (evt.type === "INSIGHT")      addInsightCard(evt.text, evt.emitter, evt.timestamp);
   };
   document.getElementById("backendLogSection").style.display = "block";
 }
@@ -349,7 +373,7 @@ async function checkExistingJob() {
         activeJobId = i;
         showJobPanel(i);
         await updateJobDisplay(i);
-        if (!job.frontendUrl) registerBackendWatch(i);
+        registerBackendWatch(i);
         return;
       }
     }
@@ -533,10 +557,10 @@ async function updateJobDisplay(jobId) {
     }
 
     const statusMsg = {
-      [S_BUILDING]:          "Building contract with Qwen3-30B...",
+      [S_BUILDING]:          "Building contract with Somnia AI agent...",
       [S_COMPILING]:         "Compiling on-chain via JSON API agent...",
-      [S_AUDITING]:          "Auditing contract with Qwen3-30B...",
-      [S_AWAITING_FALLBACK]: "On-chain agents escalated — Claude building contract...",
+      [S_AUDITING]:          "Auditing contract with Somnia AI agent...",
+      [S_AWAITING_FALLBACK]: "On-chain agents escalated — fallback layer building contract...",
       [S_APPROVED]:          "Audit passed — deploy when ready",
       [S_COMPLETE]:          "Contract deployed",
       [S_FAILED]:            "Pipeline failed",
@@ -758,7 +782,7 @@ function startFrontendTimeout() {
   if (_frontendTimeoutTimer || currentFrontendUrl) return;  // already running or already done
   _frontendTimeoutTimer = setTimeout(() => {
     if (!currentFrontendUrl) {
-      document.getElementById("frontendStatus").textContent = "On-chain frontend timed out — Claude building...";
+      document.getElementById("frontendStatus").textContent = "On-chain frontend timed out — fallback layer building...";
     }
   }, FRONTEND_UI_TIMEOUT);
 }
@@ -766,6 +790,60 @@ function startFrontendTimeout() {
 function cancelFrontendTimeout() {
   if (_frontendTimeoutTimer) { clearTimeout(_frontendTimeoutTimer); _frontendTimeoutTimer = null; }
 }
+
+// ── On-chain AI insights ──────────────────────────────────────────────────────
+let _latestInsightTs = 0;
+
+function addInsightCard(text, emitter, timestamp, prepend = true) {
+  document.getElementById("insightsPlaceholder").style.display = "none";
+  if (timestamp && timestamp > _latestInsightTs) _latestInsightTs = timestamp;
+  const card = document.createElement("div");
+  card.className = "insight-card";
+  const t = timestamp
+    ? new Date(timestamp * 1000).toLocaleTimeString()
+    : new Date().toLocaleTimeString();
+  const addr = emitter
+    ? `<div class="insight-time">${emitter.slice(0,6)}…${emitter.slice(-4)} · ${t}</div>`
+    : `<div class="insight-time">${t}</div>`;
+  card.innerHTML = `<div class="insight-text">${text.replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div>${addr}`;
+  const container = document.getElementById("insightsList");
+  if (prepend) container.insertBefore(card, container.firstChild);
+  else container.appendChild(card);
+}
+
+function loadRecentInsights() {
+  fetch(`${BACKEND_URL}/api/v3/insights?n=5`)
+    .then(r => r.json())
+    .then(list => {
+      list.forEach(i => addInsightCard(i.text, i.emitter, i.timestamp, false));
+    })
+    .catch(() => {});
+}
+
+function pollInsights() {
+  fetch(`${BACKEND_URL}/api/v3/insights?n=5`)
+    .then(r => r.json())
+    .then(list => {
+      const fresh = list.filter(i => i.timestamp > _latestInsightTs);
+      [...fresh].reverse().forEach(i => addInsightCard(i.text, i.emitter, i.timestamp, true));
+    })
+    .catch(() => {});
+}
+
+function fetchStats() {
+  fetch(`${BACKEND_URL}/api/v3/stats`)
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById("statContracts").textContent = d.contracts ?? "—";
+      document.getElementById("statInsights").textContent  = d.insights  ?? "—";
+    })
+    .catch(() => {});
+}
+
+fetchStats();
+setInterval(fetchStats, 30000);
+loadRecentInsights();
+setInterval(pollInsights, 15000);
 </script>
 </body>
 </html>

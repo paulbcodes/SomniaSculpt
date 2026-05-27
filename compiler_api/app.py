@@ -10,7 +10,7 @@ CORS(app)
 SOLC_VERSION        = "0.8.20"
 SOMNIA_RPC          = "https://api.infra.testnet.somnia.network/"
 ORCHESTRATOR_V2     = "0xA9991F20dE5bBD635de95cdf49B7Cf24a62183d1"
-ORCHESTRATOR_V3     = "0xD21f0262bE547Ac4d37979421e6Cb020FAD40B45"   # TODO: set after deploying PipelineOrchestratorV3
+ORCHESTRATOR_V3     = "0xe5E61535d586d2132B8Ee45E28e67eAEaFD2a8F7"
 ORCHESTRATOR        = ORCHESTRATOR_V2  # default for backward compatibility
 
 _GET_JOB_ABI = [{
@@ -111,9 +111,10 @@ def compile_direct():
 # ?v= param is the fixAttempts counter used as a cache-busting key
 @app.route("/job/<int:job_id>/result")
 def job_result(job_id):
-    v    = request.args.get("v", "0")
-    orch = _resolve_orchestrator(request.args.get("orch", ""))
-    cache_key = (job_id, v, orch)
+    v       = request.args.get("v", "0")
+    orch    = _resolve_orchestrator(request.args.get("orch", ""))
+    offchain = request.args.get("offchain", "")
+    cache_key = (job_id, v, orch, offchain)
 
     if cache_key not in _cache:
         try:
@@ -135,7 +136,7 @@ def job_artifacts(job_id):
     orch = _resolve_orchestrator(request.args.get("orch", ""))
     # find latest cached version for this jobId + orch
     latest = None
-    for (jid, v, o), data in _cache.items():
+    for (jid, v, o, *_), data in _cache.items():
         if jid == job_id and o == orch and data["result"] == "ok":
             latest = data
 

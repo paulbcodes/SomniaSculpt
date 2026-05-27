@@ -34,6 +34,7 @@ from agents.auditor import review as audit_contract
 from agents.frontend_builder import generate as build_frontend, is_complete as fe_is_complete
 from agents.frontend_auditor import review as audit_frontend
 from tools.compiler import compile_contract, get_artifacts
+from tools.reactive_registrar import register_contract, subscribe_to_events
 
 load_dotenv()
 
@@ -45,7 +46,7 @@ COMPILER_API   = os.getenv("COMPILER_API_URL", "https://dexsnip.site/solc")
 PUBLIC_URL     = os.getenv("V3_PUBLIC_URL", "http://localhost:5001")
 
 CONTRACT_TIMEOUT  = int(os.getenv("V3_CONTRACT_TIMEOUT",  "300"))   # 5 min
-FRONTEND_TIMEOUT  = int(os.getenv("V3_FRONTEND_TIMEOUT",  "180"))   # 3 min
+FRONTEND_TIMEOUT  = int(os.getenv("V3_FRONTEND_TIMEOUT",  "30"))    # 30s — on-chain frontend never succeeds at fixed cost
 POLL_INTERVAL     = int(os.getenv("V3_POLL_INTERVAL",     "10"))
 MAX_V1_ITER       = 5
 
@@ -151,10 +152,16 @@ def _send_tx(w3: Web3, account, fn_call):
     base_fee = latest.get("baseFeePerGas", w3.eth.gas_price)
     priority_fee = w3.to_wei(1, "gwei")
 
+    try:
+        gas_estimate = fn_call.estimate_gas({"from": account.address})
+        gas = int(gas_estimate * 1.3)
+    except Exception:
+        gas = 10_000_000
+
     tx = fn_call.build_transaction({
         "from":                 account.address,
         "nonce":                w3.eth.get_transaction_count(account.address),
-        "gas":                  10_000_000,
+        "gas":                  gas,
         "maxFeePerGas":         base_fee * 2 + priority_fee,
         "maxPriorityFeePerGas": priority_fee,
     })
@@ -196,62 +203,81 @@ def _store_frontend(job_id: int, html: str, output_dir: Path) -> str:
 def _run_contract_fallback(job_id: int, idea: str, w3: Web3, account,
                            contract, queue: Queue) -> bool:
     """Run V1 Claude build+audit loop, submit result to V3 contract. Returns True on success."""
-    _emit(queue, "FALLBACK", msg="[V3] On-chain agents exhausted — Claude taking over contract build...")
+    _emit(queue, "FALLBACK", msg="[V3] On-chain agents exhausted — fallback layer taking over contract build...")
 
     previous_code = None
     issues = []
 
     for i in range(1, MAX_V1_ITER + 1):
-        _emit(queue, "LOG", msg=f"[CLAUDE] Building contract ({i}/{MAX_V1_ITER})...")
+        _emit(queue, "LOG", msg=f"[FALLBACK] Building contract ({i}/{MAX_V1_ITER})...")
         try:
             code = build_contract(idea, previous_code, issues if issues else None)
         except Exception as e:
-            _emit(queue, "LOG", msg=f"[CLAUDE] Builder error: {e}", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Builder error: {e}", error=True)
             continue
 
         compile_result = compile_contract(code)
         if not compile_result["success"]:
             errs = compile_result["errors"]
-            _emit(queue, "LOG", msg=f"[CLAUDE] Compile failed — {errs[0][:80] if errs else 'unknown'}", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Compile failed — {errs[0][:80] if errs else 'unknown'}", error=True)
             issues = [f"Compilation error: {e}" for e in errs]
             previous_code = code
             continue
 
-        _emit(queue, "LOG", msg="[CLAUDE] Compiled — running audit...")
+        _emit(queue, "LOG", msg="[FALLBACK] Compiled — running audit...")
         try:
             audit = audit_contract(idea, code, compile_result, {"summary": "N/A", "issues": []})
         except Exception as e:
-            _emit(queue, "LOG", msg=f"[CLAUDE] Auditor error: {e}", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Auditor error: {e}", error=True)
             issues = [str(e)]
             previous_code = code
             continue
 
         if not audit.get("approved"):
             crits = audit.get("critical_issues", [])
-            _emit(queue, "LOG", msg=f"[CLAUDE] Audit not approved — {len(crits)} issue(s)", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Audit not approved — {len(crits)} issue(s)", error=True)
             issues = crits + audit.get("warnings", [])
             previous_code = code
             continue
 
-        _emit(queue, "LOG", msg="[CLAUDE] Contract approved — submitting to chain...", ok=True)
+        _emit(queue, "LOG", msg="[FALLBACK] Contract approved — submitting to chain...", ok=True)
 
         # A late Qwen response can arrive after AwaitingFallback and reset state to
         # Compiling/Auditing. Wait up to 3 min for the state to return to AwaitingFallback
         # before calling submitOffChainBuild (which requires that state).
         for _ in range(18):
             try:
-                state_now = contract.functions.getJob(job_id).call()[2]
+                state_now = contract.functions.getJob(job_id).call()[1]
             except Exception:
                 state_now = STATE_AWAITING_FALLBACK
             if state_now == STATE_AWAITING_FALLBACK:
                 break
             if state_now in (STATE_APPROVED, STATE_COMPLETE, STATE_FAILED):
-                _emit(queue, "LOG", msg=f"[V3] Job moved to state {state_now} while Claude was building — skipping submit", error=True)
+                _emit(queue, "LOG", msg=f"[V3] Job moved to state {state_now} while fallback layer was building — skipping submit", error=True)
                 return False
             _emit(queue, "LOG", msg=f"[V3] Late Qwen response in flight (state={state_now}), waiting...")
             time.sleep(10)
 
         for attempt in range(3):
+            # wait for AwaitingFallback before each attempt — late Qwen responses can temporarily change state
+            for _ in range(18):
+                try:
+                    state_now = contract.functions.getJob(job_id).call()[1]
+                except Exception:
+                    state_now = STATE_AWAITING_FALLBACK
+                if state_now == STATE_AWAITING_FALLBACK:
+                    # stability delay — let any in-flight Qwen responses arrive before sending
+                    time.sleep(20)
+                    state_now = contract.functions.getJob(job_id).call()[1]
+                    if state_now != STATE_AWAITING_FALLBACK:
+                        _emit(queue, "LOG", msg=f"[V3] State changed during stability delay (state={state_now}), waiting...")
+                        continue
+                    break
+                if state_now in (STATE_APPROVED, STATE_COMPLETE, STATE_FAILED):
+                    _emit(queue, "LOG", msg=f"[V3] Job moved to state {state_now} while waiting to submit — skipping", error=True)
+                    return False
+                _emit(queue, "LOG", msg=f"[V3] Waiting for AwaitingFallback before attempt {attempt+1} (state={state_now})...")
+                time.sleep(10)
             try:
                 _send_tx(w3, account, contract.functions.submitOffChainBuild(job_id, code))
                 _emit(queue, "LOG", msg="[V3] submitOffChainBuild sent — on-chain agents resuming compile+audit", ok=True)
@@ -262,7 +288,7 @@ def _run_contract_fallback(job_id: int, idea: str, w3: Web3, account,
                     time.sleep(10)
         return False
 
-    _emit(queue, "LOG", msg="[CLAUDE] Could not build contract after max iterations", error=True)
+    _emit(queue, "LOG", msg="[FALLBACK] Could not build contract after max iterations", error=True)
     return False
 
 
@@ -270,18 +296,18 @@ def _run_frontend_fallback(job_id: int, idea: str, abi: list, address: str,
                            chain_id: int, w3: Web3, account, contract,
                            queue: Queue, output_dir: Path) -> bool:
     """Run V1 Claude frontend build+audit loop, submit result for on-chain audit."""
-    _emit(queue, "LOG", msg="[V3] Frontend fallback — Claude building frontend...")
+    _emit(queue, "LOG", msg="[V3] Frontend fallback — fallback layer building frontend...")
 
     prev_fe = None
     fe_issues = []
 
     for i in range(1, MAX_V1_ITER + 1):
-        _emit(queue, "LOG", msg=f"[CLAUDE] Building frontend ({i}/{MAX_V1_ITER})...")
+        _emit(queue, "LOG", msg=f"[FALLBACK] Building frontend ({i}/{MAX_V1_ITER})...")
         try:
             fe_code = build_frontend(idea, "Contract", address, abi, chain_id,
                                      None, prev_fe, fe_issues if fe_issues else None)
         except Exception as e:
-            _emit(queue, "LOG", msg=f"[CLAUDE] Frontend builder error: {e}", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Frontend builder error: {e}", error=True)
             continue
 
         if not fe_is_complete(fe_code):
@@ -292,27 +318,27 @@ def _run_frontend_fallback(job_id: int, idea: str, abi: list, address: str,
         try:
             fe_audit = audit_frontend(idea, "Contract", address, abi, fe_code)
         except Exception as e:
-            _emit(queue, "LOG", msg=f"[CLAUDE] Frontend auditor error: {e}", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Frontend auditor error: {e}", error=True)
             fe_issues = [str(e)]
             prev_fe = fe_code
             continue
 
         if not fe_audit.get("approved"):
             crits = fe_audit.get("critical_issues", [])
-            _emit(queue, "LOG", msg=f"[CLAUDE] Frontend not approved — {len(crits)} issue(s)", error=True)
+            _emit(queue, "LOG", msg=f"[FALLBACK] Frontend not approved — {len(crits)} issue(s)", error=True)
             fe_issues = crits + fe_audit.get("warnings", [])
             prev_fe = fe_code
             continue
 
-        _emit(queue, "LOG", msg="[CLAUDE] Frontend approved — storing and submitting for on-chain audit...", ok=True)
+        _emit(queue, "LOG", msg="[FALLBACK] Frontend approved — storing and submitting for on-chain audit...", ok=True)
         return _submit_frontend(job_id, fe_code, idea, w3, account, contract, queue, output_dir)
 
     # Max iterations — submit best attempt anyway
     if prev_fe:
-        _emit(queue, "LOG", msg="[CLAUDE] Max frontend iterations — submitting best attempt...")
+        _emit(queue, "LOG", msg="[FALLBACK] Max frontend iterations — submitting best attempt...")
         return _submit_frontend(job_id, prev_fe, idea, w3, account, contract, queue, output_dir)
 
-    _emit(queue, "LOG", msg="[CLAUDE] Frontend build failed completely", error=True)
+    _emit(queue, "LOG", msg="[FALLBACK] Frontend build failed completely", error=True)
     return False
 
 
@@ -333,6 +359,56 @@ def _submit_frontend(job_id: int, html: str, idea: str, w3: Web3, account,
         # Still emit the URL so user can access the HTML even without on-chain audit
         _emit(queue, "FRONTEND_URL", url=frontend_url)
         return False
+
+
+_REACTIVE_HANDLER = "0x3BdF983FAd09D2a2b72b7a8eA10A0ef45d9172C2"
+_RH_ABI = [{"type": "event", "name": "InsightStored", "inputs": [
+    {"name": "requestId", "type": "uint256", "indexed": True},
+    {"name": "emitter",   "type": "address", "indexed": True},
+    {"name": "topic0",    "type": "bytes32", "indexed": True},
+    {"name": "insight",   "type": "string",  "indexed": False},
+]}]
+
+
+def _register_reactive(deployed_addr: str, idea: str, audit_approved: bool, queue: Queue):
+    already_registered = False
+    try:
+        register_contract(deployed_addr, idea, audit_approved, 0, 0)
+        _emit(queue, "LOG", msg="[Reactive] Contract registered on ReactiveHandler")
+    except Exception as e:
+        if "Already registered" in str(e):
+            already_registered = True
+            _emit(queue, "LOG", msg="[Reactive] Contract already registered — resuming monitor")
+        else:
+            _emit(queue, "LOG", msg=f"[Reactive] Registration failed: {e}", error=True)
+            return
+
+    if not already_registered:
+        try:
+            subscribe_to_events(deployed_addr)
+            _emit(queue, "LOG", msg="[Reactive] Subscribed to Reactivity precompile — on-chain AI monitoring active", ok=True)
+        except Exception as e:
+            _emit(queue, "LOG", msg=f"[Reactive] Subscribe failed: {e}", error=True)
+
+    _start_insight_monitor(deployed_addr, queue)
+
+
+def _start_insight_monitor(deployed_addr: str, queue: Queue):
+    from tools.somnia_monitor import start as monitor_start
+    insight_q: Queue = Queue()
+    stop = threading.Event()
+    monitor_start(_REACTIVE_HANDLER, _RH_ABI, insight_q, stop)
+    emitter_lower = deployed_addr.lower()
+
+    def _forward():
+        while True:
+            evt = insight_q.get()
+            if evt.get("type") == "CHAIN_EVENT" and evt.get("event_name") == "InsightStored":
+                params = evt.get("params", {})
+                if params.get("emitter", "").lower() == emitter_lower:
+                    _emit(queue, "INSIGHT", text=params.get("insight", ""), timestamp=int(time.time()))
+
+    threading.Thread(target=_forward, daemon=True).start()
 
 
 def watch_job(job_id: int, orchestrator_address: str, queue: Queue, output_dir: str = "output/v3"):
@@ -356,11 +432,12 @@ def watch_job(job_id: int, orchestrator_address: str, queue: Queue, output_dir: 
     )
     out_dir = Path(output_dir)
 
-    last_state           = -1
+    last_state                = -1
     contract_fallback_started = False
     frontend_initiated        = False
     frontend_start_time       = 0
     frontend_done             = False
+    reactivity_started        = False
 
     _emit(queue, "LOG", msg=f"[V3] Watching job #{job_id}...")
 
@@ -375,6 +452,7 @@ def watch_job(job_id: int, orchestrator_address: str, queue: Queue, output_dir: 
         state           = job[1]
         idea            = job[2]
         deployed_addr   = job[5]
+        audit_approved  = job[6]
         offchain_built  = job[9]
         frontend_url    = job[10]
         fe_audit_passed = job[11]
@@ -431,7 +509,7 @@ def watch_job(job_id: int, orchestrator_address: str, queue: Queue, output_dir: 
                         return
 
                 if not frontend_done:
-                    _emit(queue, "LOG", msg="[V3] Frontend timeout — handing to Claude...", error=True)
+                    _emit(queue, "LOG", msg="[V3] Frontend timeout — handing to fallback layer...", error=True)
                     frontend_done = True
                     abi_list = _frontend_artifacts["abi"] if _frontend_artifacts else []
                     chain_id = 50312
@@ -442,18 +520,20 @@ def watch_job(job_id: int, orchestrator_address: str, queue: Queue, output_dir: 
 
             threading.Thread(target=_check_onchain_frontend, daemon=True).start()
 
+        # ── Reactivity registration (once, after deploy) ──────────────────────
+        zero = "0x0000000000000000000000000000000000000000"
+        if state == STATE_COMPLETE and not reactivity_started \
+                and deployed_addr and deployed_addr != zero:
+            reactivity_started = True
+            threading.Thread(
+                target=_register_reactive,
+                args=(deployed_addr, idea, audit_approved, queue),
+                daemon=True,
+            ).start()
+
         # ── Terminal states ───────────────────────────────────────────────────
         if state == STATE_FAILED:
             _emit(queue, "LOG", msg="[V3] Job failed permanently", error=True)
-            break
-
-        if state == STATE_COMPLETE and frontend_done and (frontend_url or fe_audit_passed):
-            _emit(queue, "LOG", msg="[V3] Pipeline fully complete", ok=True)
-            break
-
-        # Safety: stop watching if job is complete and frontend been handled
-        if state == STATE_COMPLETE and frontend_done:
-            time.sleep(POLL_INTERVAL * 3)
             break
 
         time.sleep(POLL_INTERVAL)
