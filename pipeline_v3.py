@@ -383,12 +383,11 @@ def _register_reactive(deployed_addr: str, idea: str, audit_approved: bool, queu
             _emit(queue, "LOG", msg=f"[Reactive] Registration failed: {e}", error=True)
             return
 
-    if not already_registered:
-        try:
-            subscribe_to_events(deployed_addr)
-            _emit(queue, "LOG", msg="[Reactive] Subscribed to Reactivity precompile — on-chain AI monitoring active", ok=True)
-        except Exception as e:
-            _emit(queue, "LOG", msg=f"[Reactive] Subscribe failed: {e}", error=True)
+    try:
+        subscribe_to_events(deployed_addr)
+        _emit(queue, "LOG", msg="[Reactive] Subscribed to Reactivity precompile — on-chain AI monitoring active", ok=True)
+    except Exception as e:
+        _emit(queue, "LOG", msg=f"[Reactive] Subscribe failed: {e}", error=True)
 
     _start_insight_monitor(deployed_addr, queue)
 

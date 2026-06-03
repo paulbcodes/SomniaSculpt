@@ -385,6 +385,7 @@ function clearJobPanel() {
   ["soliditySection","auditSection","deploySection","completeSection","failedSection"].forEach(id => {
     document.getElementById(id).style.display = "none";
   });
+  document.getElementById("deployBtn").disabled = false;
   document.getElementById("frontendDownloadSection").style.display = "none";
   document.getElementById("fallbackBanner").style.display = "none";
   document.getElementById("backendLogSection").style.display = "none";
@@ -576,6 +577,8 @@ async function deployContract() {
   document.getElementById("deployBtn").disabled = true;
   document.getElementById("deployError").textContent = "";
   try {
+    signer   = await provider.getSigner();
+    contract = new ethers.Contract(ORCHESTRATOR_ADDRESS, ABI, signer);
     setStatus("Fetching compiled artifacts...");
     const res = await fetch(`${COMPILER_API}/job/${activeJobId}/artifacts?orch=${ORCHESTRATOR_ADDRESS}`);
     if (!res.ok) throw new Error("Compiler API unavailable — try again shortly");
