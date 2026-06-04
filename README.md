@@ -137,9 +137,4 @@ pipeline_v3.py                 # fallback watcher
 
 ---
 
-## Roadmap
 
-- **On-chain frontend generation** — becomes fully viable when Somnia's per-request pricing ships; fallback path will be retired
-- **Prompt routing** — use the audit result to select a specialised fix prompt (reentrancy failure, access control failure, arithmetic issue each get a targeted prompt); agent output driving agent selection is a natural next step for the state machine
-- **Prompt tuning** — reduce false positive audit failures through targeted prompt refinement once more test data is collected
-- **UI improvements** — richer status feedback
